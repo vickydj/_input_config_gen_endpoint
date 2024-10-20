@@ -1,0 +1,107 @@
+import logging
+import logging.handlers
+import os
+import sys
+import json
+
+from splunk.persistconn.application import PersistentServerConnectionApplication
+
+def setup_logger(level):
+    logger = logging.getLogger('my_rest')
+    logger.setLevel(level)
+    handler = logging.handlers.RotatingFileHandler(os.environ['SPLUNK_HOME']+'/var/log/splunk/rest.log', maxBytes=1000000, backupCount=1)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    return logger
+
+logger = setup_logger(logging.DEBUG)
+
+class MyRestHandler(PersistentServerConnectionApplication):
+    def __init__(self, command_line, command_arg):
+        super(MyRestHandler, self).__init__()
+
+    def handle(self, in_string):
+        """
+        Handle the incoming request, log the payload, and return a response.
+        """
+        try:
+            # Parse the incoming request body (assumed to be JSON)
+            request_data = json.loads(in_string)
+
+            data=request_data['payload']
+
+            # Log the incoming data
+            logger.debug(f"Received payload: {request_data}")
+            logger.info(f"Received data: {data}")
+
+            # Return a success response
+            return {
+                'payload': {"status": "success", "message": "Payload received and logged."},
+                'status': 200
+            }
+
+        except json.JSONDecodeError:
+            logger.error("Invalid JSON format")
+            return {
+                'payload': {"status": "error", "message": "Invalid JSON format."},
+                'status': 400
+            }
+
+        except Exception as e:
+            logger.error(f"Error processing request: {e}")
+            return {
+                'payload': {"status": "error", "message": str(e)},
+                'status': 500
+            }
+
+    def done(self):
+        """
+        Called after the request completes (optional).
+        """
+        pass
+
+
+
+
+# class my_handler(PersistentServerConnectionApplication):
+#     def __init__(self, command_line, command_arg):
+#         PersistentServerConnectionApplication.__init__(self)
+
+#     def handle(self, in_string):
+#         logger.info('in_string={}'.format(in_string))    
+#         in_string = json.loads(in_string)
+#         session_key1 = in_string['session']['authtoken']
+#         method = in_string['method']
+#         # if method == 'GET':
+#         #     return {'payload': "GET", 'status': 200}
+#         # if method == 'POST':
+#         #     return {'payload': "POST", 'status': 200}
+         
+
+    
+#         payload = session_key1 + " " + method
+
+#         return {'payload': payload, 'status': 200}
+
+# class my_rest_handler(PersistentServerConnectionApplication):
+#     def __init__(self, command_line, command_arg):
+#         super(my_rest_handler, self).__init__()
+#         self.command_line = command_line
+#         self.command_arg = command_arg
+
+#     def handle(self, in_string):
+#         try:
+#             payload = {
+#                 "text": str(in_string) + " hello"
+#             }
+#             return {'payload': payload, 'status': 200}
+#         except Exception as e:
+#             return {'payload': {"error": str(e)}, 'status': 500}
+
+#     def handleStream(self, handle, in_string):
+#         raise NotImplementedError(
+#             "PersistentServerConnectionApplication.handleStream")
+
+#     def done(self):
+#         pass
