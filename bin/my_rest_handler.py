@@ -22,9 +22,9 @@ create ability to update source/app probably in a new endpoint
 
 
 def setup_logger(level):
-    logger = logging.getLogger('my_rest')
+    logger = logging.getLogger('_rest_process_payload_toconfigs')
     logger.setLevel(level)
-    handler = logging.handlers.RotatingFileHandler(os.environ['SPLUNK_HOME']+'/var/log/splunk/rest.log', maxBytes=1000000, backupCount=5)
+    handler = logging.handlers.RotatingFileHandler(os.environ['SPLUNK_HOME']+'/var/log/splunk/_rest_process_payload_toconfigs.log', maxBytes=1000000, backupCount=5)
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
     logger.addHandler(handler)
@@ -40,28 +40,43 @@ class MyRestHandler(PersistentServerConnectionApplication):
     def __init__(self, command_line, command_arg):
         super(MyRestHandler, self).__init__()
 
-    def get_values(self,in_string):
 
+
+    def get_values(self, in_string):
+        logger.debug(f"Received payload: {in_string}")
         try:
-            request_data = json.loads(in_string)
-            payload = request_data['payload']
-            payload_dict = json.loads(payload)
-            index_name = payload_dict.get('my_index')
-            message = payload_dict.get('message')
-            my_sourcetype = payload_dict.get('my_sourcetype')
-            additional_metadata = payload_dict.get('additional_metadata', {})
-            app_name = additional_metadata.get('app_name')
-            environment = additional_metadata.get('environment')
-            app_name = f"{environment}"+f"_{app_name}"
-            version = additional_metadata.get('version')
-            my_source = payload_dict.get('my_source', {})
-            my_host = payload_dict.get('my_host', {})
-            logger.info(f"fields extracted for app_name : {app_name}")
-            return index_name, message, my_sourcetype, app_name, environment, version, my_source, my_host
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON format")
-            return None, None, None, None, None, None, None, None
+            # Parse the outer JSON
+            outer_json = json.loads(in_string)
+            logger.debug(f"Parsed outer JSON: {outer_json}")
+            
+            # Get the payload from the outer JSON and parse it
+            payload_json = json.loads(outer_json['payload'])
+            logger.debug(f"Parsed payload JSON: {payload_json}")
+            
+            # Extract the required values
+            message = payload_json.get('message', '')
+            index_name = payload_json.get('my_index', '')
+            my_sourcetype = payload_json.get('my_sourcetype', '')
+            my_source = payload_json.get('my_source', {})
+            my_host = payload_json.get('my_host', {})
+            
+            # Extract additional metadata
+            additional_metadata = payload_json.get('additional_metadata', {})
+            app_name = additional_metadata.get('app_name', '')
+            environment = additional_metadata.get('environment', '')
+            version = additional_metadata.get('version', '')
 
+            return index_name, message, my_sourcetype, app_name, environment, version, my_source, my_host
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decoding error: {str(e)}")
+            raise
+        except KeyError as e:
+            logger.error(f"Missing key in JSON: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error in get_values: {str(e)}")
+            raise
     def generate_configs(self,sources, sourcetype, index):
         configs = [
             f"[monitor://{source_value}]\n"
@@ -258,6 +273,7 @@ stateOnClient = enabled
 
         return_payload_string = ""
         try:
+            logger.info(f"Received payload: {in_string}")
             index_name, message, my_sourcetype, app_name, environment, version, my_source, my_host = self.get_values(in_string)
             # perform all the calls from here, and get its status 
             if app_name:
