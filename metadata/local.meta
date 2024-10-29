@@ -5,3 +5,9 @@ modtime = 1582334314.821079000
 [app/launcher]
 version = 8.1.0
 modtime = 1582334314.821897000
+
+[]
+access = read : [ * ], write : [ admin, power ]
+export = system
+version = 9.3.1
+modtime = 1730194993.681689000

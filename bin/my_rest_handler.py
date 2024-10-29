@@ -1,10 +1,10 @@
 import logging
 import logging.handlers
-import datetime
+from datetime import datetime as dt
 import os
 import json
 import re
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 from splunk.persistconn.application import PersistentServerConnectionApplication
@@ -12,7 +12,6 @@ from splunk.persistconn.application import PersistentServerConnectionApplication
 # to do 
 """
 deploy this on ds and check if successfully reaching uf 
-fix timestamp - date time doesnt have now()
 create ability to delete source/app probably in a new endpoint
 create ability to update source/app probably in a new endpoint
 """
@@ -40,31 +39,37 @@ class MyRestHandler(PersistentServerConnectionApplication):
     def __init__(self, command_line, command_arg):
         super(MyRestHandler, self).__init__()
 
-
-
     def get_values(self, in_string):
         logger.debug(f"Received payload: {in_string}")
         try:
-            # Parse the outer JSON
+            
             outer_json = json.loads(in_string)
             logger.debug(f"Parsed outer JSON: {outer_json}")
             
-            # Get the payload from the outer JSON and parse it
-            payload_json = json.loads(outer_json['payload'])
-            logger.debug(f"Parsed payload JSON: {payload_json}")
+            
+            payload_wrapper = json.loads(outer_json['payload'])
+            logger.debug(f"Parsed payload wrapper: {payload_wrapper}")
+            
+            # Parse the actual payload content (third level)
+            payload_json = json.loads(payload_wrapper['payload'])
+            logger.debug(f"Parsed final payload JSON: {payload_json}")
             
             # Extract the required values
             message = payload_json.get('message', '')
             index_name = payload_json.get('my_index', '')
             my_sourcetype = payload_json.get('my_sourcetype', '')
-            my_source = payload_json.get('my_source', {})
-            my_host = payload_json.get('my_host', {})
+            my_source = payload_json.get('my_source', [])
+            my_host = payload_json.get('my_host', [])
             
             # Extract additional metadata
             additional_metadata = payload_json.get('additional_metadata', {})
             app_name = additional_metadata.get('app_name', '')
             environment = additional_metadata.get('environment', '')
             version = additional_metadata.get('version', '')
+            
+            logger.debug(f"Extracted values: message={message}, index={index_name}, "
+                        f"sourcetype={my_sourcetype}, source={my_source}, host={my_host}, "
+                        f"app={app_name}, env={environment}, ver={version}")
 
             return index_name, message, my_sourcetype, app_name, environment, version, my_source, my_host
 
@@ -77,16 +82,19 @@ class MyRestHandler(PersistentServerConnectionApplication):
         except Exception as e:
             logger.error(f"Unexpected error in get_values: {str(e)}")
             raise
-    def generate_configs(self,sources, sourcetype, index):
+
+    def generate_configs(self, sources, sourcetype, index):
+        logger.debug(f"Generate config {sources,sourcetype,index}")
         configs = [
-            f"[monitor://{source_value}]\n"
+            f"[monitor://{source}]\n"
             f"index = {index}\n"
             f"sourcetype = {sourcetype}\n"
             f"disabled = false\n\n"
-            for source_key, source_value in sources.items()
+            for source in sources  # Removed the () as sources is a list
         ]
         logger.info(f"Generated {len(configs)} configurations")
         return configs
+
 
     def compare_and_update_input_configs(self, local_conf_path, configs, message):
         existing_configs = defaultdict(list)
@@ -115,7 +123,7 @@ class MyRestHandler(PersistentServerConnectionApplication):
             logger.info(f"Attempting to write new configs : {local_conf_path}")
             with local_conf_path.open('a') as f:
                 # Write the message once, outside the loop
-                f.write(f'\n # *** Start of inputs from : {message}\n')
+                f.write(f'\n # *** Start of inputs from : {message} : Created at {dt.now().strftime("%Y-%m-%d %H:%M:%S %Z")}\n')
                 
                 for stanza, lines in new_configs.items():
                     f.write(f"{stanza}\n")
@@ -148,7 +156,7 @@ class MyRestHandler(PersistentServerConnectionApplication):
                 
                 
                 app_conf_path = os.path.join(directory, 'app.conf')
-                # current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+                current_time = dt.now().strftime("%Y-%m-%d %H:%M:%S %Z")
                 
                 
                 app_conf_content = f"""
@@ -157,7 +165,7 @@ class MyRestHandler(PersistentServerConnectionApplication):
 #==============================================================================
 # Created by: Automated Splunk App Configuration
 # Author: Vignesh Narendran
-# Creation Date: current_time
+# Creation Date: {current_time}
 # 
 # Description:
 # This file was automatically generated as part of the {app_name} Splunk app.
@@ -189,13 +197,13 @@ class MyRestHandler(PersistentServerConnectionApplication):
         except Exception as e:
             logger.error(f"Failed to write configurations to file: {str(e)}")
             return False
-
-    def compare_and_add_serverclass_whitelist_conf(self, app_name, index, sourcetype, hosts):
-        
+    def compare_and_add_serverclass_whitelist_conf(self, env, app_name, index, sourcetype, hosts):
+        logger.debug(f"Processing serverclass with hosts: {hosts}")
+        current_time = dt.now().strftime("%Y-%m-%d %H:%M:%S %Z")
         serverclass_directory = Path(os.environ.get('SPLUNK_HOME', '')) / 'etc' / 'automated_config_generator_serverclass'
         os.makedirs(serverclass_directory, exist_ok=True)
         serverclass_path = os.path.join(serverclass_directory, 'serverclass.conf')
-        serverclass_name = f"{app_name}_{index}_{sourcetype}"
+        serverclass_name = f"{env}_{app_name}_{index}_{sourcetype}"
 
         existing_content = ""
         existing_hosts = set()
@@ -206,7 +214,6 @@ class MyRestHandler(PersistentServerConnectionApplication):
 
         # Read existing content and check for the server class
         if os.path.exists(serverclass_path):
-
             with open(serverclass_path, 'r') as f:
                 existing_content = f.read()
                 app_stanza_pattern = re.compile(rf'\[serverClass:{re.escape(serverclass_name)}:app:{re.escape(app_name)}\](.*?)(?=\n\[|\Z)', re.DOTALL)
@@ -214,7 +221,6 @@ class MyRestHandler(PersistentServerConnectionApplication):
                 if match:
                     logger.info(f"Found existing server class configuration for {serverclass_name}")
                     server_class_exists = True
-                    # mark start and end of matched serverclass to append new hosts 
                     app_stanza_start = match.start()
                     app_stanza_end = match.end()
                     whitelist_pattern = re.compile(rf'whitelist\.(\d+)\s*=\s*(\S+)')
@@ -223,13 +229,14 @@ class MyRestHandler(PersistentServerConnectionApplication):
                         existing_hosts.add(host)
                         max_whitelist_num = max(max_whitelist_num, int(num))
 
-        new_hosts = OrderedDict((hostname, None) for hostname in hosts.values() if hostname not in existing_hosts)
+        # Filter out existing hosts and create list of new hosts
+        new_hosts = [host for host in hosts if host not in existing_hosts]
+        logger.debug(f"Existing hosts: {existing_hosts}")
+        logger.debug(f"New hosts to add: {new_hosts}")
 
-        # current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
-# class doesnt exist, create new
         if not server_class_exists:
             logger.info(f"Creating new server class configuration for {serverclass_name}")
-            content = f"""\n # Added on current_time
+            content = f"""\n # Added on {current_time}
 [serverClass:{serverclass_name}]
 restartSplunkWeb = 0
 restartSplunkd = 1
@@ -237,36 +244,30 @@ stateOnClient = enabled
 
 [serverClass:{serverclass_name}:app:{app_name}]
 """
-            for i, hostname in enumerate(new_hosts.keys()):
+            for i, hostname in enumerate(new_hosts):
                 content += f"whitelist.{i} = {hostname}\n"
 
             with open(serverclass_path, 'a') as f:
                 f.write(content)
-            print(f"Added new server class configuration for {serverclass_name}")
+            logger.info(f"Added new server class configuration for {serverclass_name}")
             return True
 
         elif new_hosts:
             logger.info(f"Adding new hosts to existing server class configuration for {serverclass_name}")
-            
-            # current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
-            content = f"""# Updated on current_time\n"""
-            for i, hostname in enumerate(new_hosts.keys(), start=max_whitelist_num + 1):
+            content = f"""# Updated on {current_time}\n"""
+            for i, hostname in enumerate(new_hosts, start=max_whitelist_num + 1):
                 content += f"whitelist.{i} = {hostname}\n"
-            # use the end of serverclass pointer found above to append from end
-            # start of serverclass reserved for future development.
             updated_content = existing_content[:app_stanza_end] + content + existing_content[app_stanza_end:]
-            # logger.debug(f"Updated content : {updated_content}")
 
             with open(serverclass_path, 'w') as f:
                 f.write(updated_content)
 
-            print(f"Added {len(new_hosts)} new hosts to existing server class {serverclass_name}")
+            logger.info(f"Added {len(new_hosts)} new hosts to existing server class {serverclass_name}")
             return True
 
         else:
-            print(f"No new hosts to add for server class {serverclass_name}. Configuration unchanged.")
+            logger.info(f"No new hosts to add for server class {serverclass_name}. Configuration unchanged.")
             return False
-
 
 
     def handle(self, in_string):
@@ -284,7 +285,7 @@ stateOnClient = enabled
                     config_write_status = self.write_configs_to_file(configs, app_name, message)
                     if config_write_status:
                         return_payload_string += "Write config = success | "
-                        serverclass_status = self.compare_and_add_serverclass_whitelist_conf(app_name, index_name, my_sourcetype, my_host)
+                        serverclass_status = self.compare_and_add_serverclass_whitelist_conf(environment, app_name, index_name, my_sourcetype, my_host)
                         if serverclass_status:
                             return_payload_string += "Write serverclass = success | "
                         else:
